@@ -5,11 +5,40 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const openai = new OpenAI({
-    // baseURL: 'https://api.deepseek.com',
-    baseURL: 'https://api.anthropic.com/v1/',
-    apiKey: process.env.OPENAI_API_KEY
-});
+
+// Initialize clients for each provider
+const clients = {
+    openai: new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+    }),
+    anthropic: new OpenAI({
+        baseURL: 'https://api.anthropic.com/v1/',
+        apiKey: process.env.ANTHROPIC_API_KEY
+    })
+};
+
+// Model configuration: maps display name to provider and actual model ID
+const modelConfig = {
+    'chatgpt-5': { provider: 'openai', modelId: 'gpt-5.2-2025-12-11' },
+    'chatgpt-5-mini': { provider: 'openai', modelId: 'gpt-5-mini-2025-08-07' },
+    'claude-sonnet-4-5': { provider: 'anthropic', modelId: 'claude-sonnet-4-5-20250929' },
+    'claude-haiku-4-5': { provider: 'anthropic', modelId: 'claude-haiku-4-5-20251001' }
+};
+
+function getClientAndModel(modelName) {
+    const config = modelConfig[modelName];
+    if (!config) {
+        throw new Error(`Unknown model: ${modelName}`);
+    }
+    return {
+        client: clients[config.provider],
+        modelId: config.modelId
+    };
+}
+
+function stripMarkdownCodeBlock(text) {
+    return text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+}
 
 // Middleware
 app.use(cors());
@@ -94,54 +123,46 @@ app.post('/api/explain-move', async (req, res) => {
     // `.trim();
 
 
-    const systemPrompt = `You are a grandmaster-level chess analyst. Your job is to explain the WHY the best move, as suggested by Stockfish, is superior.
+    const systemPrompt = `You are a chess analyst helping players understand positions and moves.
 
-INPUT
-User will provide a JSON object:
+TASK: Analyze the chess position and explain what both moves accomplish.
+
+INPUT (JSON):
 {
-    "additionalContext": "[optional additional context provided regarding the game]",
-    "color": "[white or black indicated by w or b]",
-    "mate": "[negative if opponent has forced checkmate in X plies turn, positive if current player has forced checkmate in X plies turn, 0 if no mate is detected] 
-    "move": {
-        "pgn": "[PGN move played]",
-        "before_fen": "[FEN before move]",
-        "after_fen": "[FEN after move]",
-    }
-    "bestMove": {
-        "pgn": "[Best move in PGN]",
-        "before_fen": "[FEN before move]",
-        "after_fen": "[FEN after move]",
-    }
-    "continuation": [{
-        "pgn": "Nc4",
-        "before_fen": "[FEN before move]",
-        "after_fen": "[FEN after move]",
-    }, {
-        "pgn": "Qf4",
-        "before_fen": "[FEN before move]",
-        "after_fen": "[FEN after move]",
-    }, {
-        "pgn": "d5",
-        "before_fen": "[FEN before move]",
-        "after_fen": "[FEN after move]",
-    }],
+    "move": { "pgn": "...", "before_fen": "...", "after_fen": "..." },
+    "bestMove": { "pgn": "...", "before_fen": "...", "after_fen": "..." },
+    "continuation": [{ "pgn": "...", "before_fen": "...", "after_fen": "..." }, ...],
+    "color": "w|b",
+    "mate": "negative = opponent has forced mate in X, positive = current player has forced mate in X, 0 = no forced mate",
+    "additionalContext": "..."
 }
 
-Pay special attention to additionalContext if provided
-
-OUTPUT
-Your response must be valid JSON. Send it in plain text format without markdown
-
-Only give UP TO MAXIMUM 8 moves from the possible continuation
-
+OUTPUT: Return ONLY raw JSON. Do NOT wrap in markdown code blocks. Do NOT use \`\`\` fences.
 {
-    "explanation": "[Explain the move]",
-    "continuations": [
-        { "move": "Nc4", "color": "black", "reason": "Moves the knight to attack White's bishop and increase control over the center." },
-        { "move": "Qf4", "color": "white", "reason": "White moves the queen to safety while maintaining pressure." }
-        ... (MAXIMUM of 8 MOVES)        
+    "position_summary": "Brief description of the position before the move (2-3 sentences)",
+    "played_move_analysis": "What the played move accomplishes",
+    "best_move_analysis": "What the best move accomplishes",
+    "key_difference": "Main difference between the moves. Be honest if subtle.",
+    "continuation_explanation": "Overall plan shown in the continuation (not move-by-move)",
+    "continuation_moves": [
+        { "move": "Nc4", "color": "black", "purpose": "What this accomplishes" }
     ]
 }
+
+CRITICAL RULES:
+1. Base analysis ONLY on FEN positions provided - never assume piece locations
+2. Before claiming any tactic, verify material count in before/after FEN matches your claim
+3. Look for: material changes, tactical patterns (pins, forks, discovered attacks), positional features (weak squares, outposts, open files), piece activity, pawn structure
+4. If mate != 0: focus on the mating attack or defense
+5. If moves seem equally valid: say "Both moves are reasonable, engine prefers X because [observable pattern]"
+6. For continuation_moves: only explain moves with clear tactical purpose (captures, checks, threats). Maximum 4 moves.
+7. Never claim certainty about deep positional compensation - acknowledge when it requires calculation
+8. Verify piece locations against FEN before mentioning them
+
+WHEN TO BE HONEST:
+- If eval difference is small and no clear tactics: "The difference is subtle and requires deep calculation"
+- If position is complex: "This position has multiple strategic ideas"
+- If you're unsure: Don't guess. Say "The advantage here is not immediately clear"
 `.trim();
 
     const userPrompt = JSON.stringify({
@@ -159,11 +180,11 @@ Only give UP TO MAXIMUM 8 moves from the possible continuation
     });
 
     try {
-        console.log('Sending request to OpenAI');
+        const { client, modelId } = getClientAndModel(model || 'claude-sonnet-4-5');
+        console.log(`Sending request to ${model} (${modelId})`);
         console.dir(JSON.parse(userPrompt));
-        const stream = await openai.chat.completions.create({
-            // model: model || "gpt-4o-mini",
-            model: 'deepseek-chat',
+        const stream = await client.chat.completions.create({
+            model: modelId,
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
@@ -183,7 +204,7 @@ Only give UP TO MAXIMUM 8 moves from the possible continuation
         console.log("\n--- Streaming complete ---");
 
         // Combine all chunks into a single string and parse as JSON
-        const fullResponse = responseChunks.join(""); // Ensure valid JSON
+        const fullResponse = stripMarkdownCodeBlock(responseChunks.join(""));
         const parsedJson = JSON.parse(fullResponse);
 
         return res.json(parsedJson); // Send clean JSON to frontend
@@ -203,84 +224,78 @@ app.post('/api/review', async (req, res) => {
 
     console.log("Received request:", { reviewType, moves });  // Log request
 
-    let systemPrompt = `You are a grandmaster-level chess analyst. Your job is to review the chess game.
+    let systemPrompt = `You are a chess analyst reviewing a game to help players improve.
 
-INPUT
-User will provide a JSON object:
+TASK: Identify key moments and patterns in the game based on evaluation swings.
+
+INPUT (JSON):
 {
-    "additionalContext": "[optional additional context provided regarding the game]",
-    "moves": [{
-        "pgn": "[PGN move played]",
-        "before_fen": "[FEN before move]",
-        "after_fen": "[FEN after move]",
-        "evalScore": "[Eval score between -8.0 to 8.0 (negative means is strong for black, positive means strong for white)]"
-        "mate": "[negative if opponent has forced checkmate in X plies turn, positive if current player has forced checkmate in X plies turn, 0 if no mate is detected]          
-    }, ...],
+    "moves": [
+        { "pgn": "...", "before_fen": "...", "after_fen": "...", "evalScore": 0.5, "mate": 0 },
+        ...
+    ],
+    "additionalContext": "..."
 }
 
-OUTPUT
-Your response must be valid JSON. Send it in plain text format without markdown. Explanation of the game can be split using new line
+Note: evalScore ranges from -8.0 to 8.0 (negative = black advantage, positive = white advantage).
+- Eval going MORE NEGATIVE = good for Black, bad for White
+- Eval going MORE POSITIVE = good for White, bad for Black
+- Example: +0.36 to -1.19 means Black made a GOOD move (gained 1.55 points), NOT a blunder
+- Example: -0.50 to +1.00 means White made a GOOD move (gained 1.50 points)
+mate: negative = opponent has forced mate, positive = current player has forced mate, 0 = no forced mate.
 
+OUTPUT: Return ONLY raw JSON. Do NOT wrap in markdown code blocks. Do NOT use \`\`\` fences.
 {
-    "explanation": "[Explanation of the game. In normal text, not formatted]",
+    "explanation": "Multi-paragraph review with clear sections (use \\n\\n for separation)"
 }
 
+STRUCTURE YOUR REVIEW (keep concise - aim for 300-400 words total):
+1. Opening: 2-3 sentences on development and early mistakes
+2. Middlegame: Focus only on the 2-3 biggest eval swings
+3. Endgame: Brief note if applicable
+4. Key Takeaways: 2-3 bullet points on what each player should learn
+
+Do NOT narrate every move. Focus only on critical turning points.
+
+CRITICAL RULES:
+1. Focus on moves where eval swings >1.5 - these are likely blunders or brilliant moves
+2. For each critical moment, describe what changed between before_fen and after_fen
+3. Look for patterns: material loss, tactical shots (pins, forks, discovered attacks), positional features (weak squares, outposts, open files)
+4. DO NOT assume piece positions - verify against FEN
+5. If many small mistakes: say "Accumulated small inaccuracies" rather than inventing specific errors
+6. Be specific: "Move 15 (Nf6) allowed a discovered attack" not "Poor piece placement throughout"
+7. For longer games (30+ moves), focus analysis on the 3-5 most critical positions rather than explaining every phase
+
+ANALYSIS APPROACH:
+- Large eval drop (>2.0): Likely hanging piece or tactical shot - verify material in FENs
+- Gradual eval decline: Positional pressure - describe observable features (weak squares, bad pieces)
+- Eval spike in opponent's favor: Missed tactic - check for checks, captures, threats in that position
+- Stable eval with fluctuations: Balanced game - focus on plans and transitions
+
+HONESTY:
+- If you can't identify why eval changed: "The evaluation shift here is not immediately obvious"
+- If multiple moves seem equally problematic: "Several inaccuracies in this phase"
+- Don't invent specific tactical patterns unless you can verify them in the FEN
 `.trim();
 
     if (reviewType === 'overall') {
         systemPrompt += `
-IMPORTANT NOTE
-You are to give an overall review of the game, provide a balanced view between white and black. Explain how was 
-the overall game perform, what are the major blunders and great moves. What are the gaps between both players and 
-how can both players improve
 
-Highlight the explanation by multiple sections, beginning, middle and end game (tactics and executions) 
-as well as key moments, missed opportunities and areas to improve on
-
-For each section focus on the strengths, weaknesses and key turning points
-
-Highlight how well both players transition to middlegame, any key positional or tactical moments stood out
-
-Are there any missed opportunities to secure a win or hold a draw? Identify key lesson for improvement
-
-Pay special attention to when the evalScore change significantly (major blunder or great move). Use this as reference 
-for your reasoning but you do NOT need to include it in the explanation unless it's a really major change. Do highlight most 
-critical blunders or brilliant moves made by both players and explain their impact
-
-Pay special attention to additionalContext if provided
-
-For example: white misses out an immediate checkmate or black blundered with the move causing the player to 
-lose advantage significantly and lose control of the center. Black could have improved by better position at step 12
-`.trim()
+FOCUS: Balanced review of both players.
+- Compare how both players handled opening, middlegame, endgame
+- Identify who made more critical mistakes (use evalScore swings)
+- Note any missed winning chances or defensive resources
+- Keep it balanced - even the winner made mistakes
+`.trim();
     } else if (reviewType === 'white' || reviewType === 'black') {
         systemPrompt += `
-IMPORTANT NOTE
-You are to give an overall review of the game, but you are focusing on ${reviewType} player. Explain how was 
-the game perform from ${reviewType} perspective, what are the major blunders and great moves. What are the gaps
-and how could ${reviewType} improve the game
 
-Highlight the explanation by multiple sections, beginning, middle and end game (tactics and executions) 
-as well as key moments, missed opportunities and areas to improve on
-
-Regardless if ${reviewType} won or lost, highlight what went well and what could have been improved. It is important
-for the player to understand
-
-For each section focus on the strengths, weaknesses and key turning points
-
-Highlight how well ${reviewType} transition to middlegame, any key positional or tactical moments stood out
-
-Are there any missed opportunities to secure a win or hold a draw? Identify key lesson for improvement
-
-Pay special attention to when the evalScore change significantly (major blunder or great move). Use this as reference 
-for your reasoning but you do NOT need to include it in the explanation unless it's a really major change. Do highlight most 
-critical blunders or brilliant moves made by ${reviewType} and explain their impact
-
-Pay special attention to additionalContext if provided
-
-For example: ${reviewType} misses out an immediate checkmate or ${reviewType} blundered with the move causing the player to 
-lose advantage significantly and lose control of the center. ${reviewType} could have improved by better position at step 12
-
-`
+FOCUS: ${reviewType}'s performance only.
+- What did ${reviewType} do well?
+- Where did ${reviewType} go wrong? (focus on evalScore drops for ${reviewType})
+- What should ${reviewType} practice based on this game?
+- Even if ${reviewType} won, identify improvement areas
+`.trim();
     } else {
         return res.status(400).json({error: 'Invalid review type: ' + reviewType})
     }
@@ -291,11 +306,11 @@ lose advantage significantly and lose control of the center. ${reviewType} could
     });
 
     try {
-        console.log('Sending request to OpenAI');
+        const { client, modelId } = getClientAndModel(model || 'claude-sonnet-4-5');
+        console.log(`Sending request to ${model} (${modelId})`);
         console.dir(JSON.parse(userPrompt));
-        const stream = await openai.chat.completions.create({
-            model: model || "gpt-4o-mini",
-            // model: 'deepseek-chat',
+        const stream = await client.chat.completions.create({
+            model: modelId,
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
@@ -315,7 +330,7 @@ lose advantage significantly and lose control of the center. ${reviewType} could
         console.log("\n--- Streaming complete ---");
 
         // Combine all chunks into a single string and parse as JSON
-        const fullResponse = responseChunks.join(""); // Ensure valid JSON
+        const fullResponse = stripMarkdownCodeBlock(responseChunks.join(""));
         const parsedJson = JSON.parse(fullResponse);
 
         return res.json(parsedJson); // Send clean JSON to frontend

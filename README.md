@@ -169,8 +169,9 @@ npm install
 # Create .env file
 touch .env
 
-# Add your OpenAI API key
+# Add your OpenAI API and Anthropic API key
 echo "OPENAI_API_KEY=<your-key>" >> .env
+echo "ANTHROPIC_API_KEY=<your-key>" >> .env
 
 # Run the project
 node start

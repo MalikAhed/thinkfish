@@ -13,29 +13,11 @@ let evalHistory = [];
 
 const additionalContext = document.getElementById('additionalContext');
 
-const toggleSwitch = document.getElementById("toggleModel");
-const toggleLabel = document.getElementById("modelLabel");
+const modelSelect = document.getElementById("modelSelect");
 
 const getModel = () => {
-    return toggleSwitch.checked ? "gpt-4o" : "gpt-4o-mini";
-}
-
-document.addEventListener("DOMContentLoaded", function () {
-
-    if (toggleSwitch.checked) {
-        toggleLabel.textContent = "4o";
-    } else {
-        toggleLabel.textContent = "4o-mini";
-    }
-
-    toggleSwitch.addEventListener("change", function () {
-        if (toggleSwitch.checked) {
-            toggleLabel.textContent = "4o";
-        } else {
-            toggleLabel.textContent = "4o-mini";
-        }
-    });
-});
+    return modelSelect.value;
+};
 
 
 const ctx = document.getElementById('evalChart').getContext('2d');
@@ -115,6 +97,7 @@ function analyzeFullGameBatch() {
     evalHistory = [];
     evalChart.data.labels = [];
     evalChart.data.datasets[0].data = [];
+    evalPositionIndex = 0;
 
     let positions = [];
     positions.push(`position fen ${game.fen()}`);
@@ -127,11 +110,10 @@ function analyzeFullGameBatch() {
     }
 
 
-    // Start first evaluation
+    // Start evaluation with search depth (not static eval)
     for (let pos of positions) {
         evaler.postMessage(pos);
-        evaler.postMessage('eval');
-        evaler.postMessage('go depth 2'); // to check for imminent mate
+        evaler.postMessage('go depth 12');
     }
     game.reset();
 
@@ -147,46 +129,64 @@ function analyzeFullGameBatch() {
 }
 
 
-let gameReviewMateEntry;
+let gameReviewMateEntry = 0;
+let pendingEvalScore = 0;
+let evalPositionIndex = 0;
 
 evaler.onmessage = function (event) {
-    if (event.data.includes("Final evaluation")) {
-        const match = event.data.match(/Final evaluation\s+([+-]?\d+\.?\d*)/);
-        const noneMatch = event.data.match(/Final evaluation:\s+none*/);
-        console.log(event.data);
-        let evalScore = 0.0;
+    // Parse the final depth info line for eval score and mate
+    if (event.data.startsWith('info depth 12')) {
+        let evalScore = 0;
 
-        if (match) {
-            evalScore = parseFloat(match[1]);
+        // Check for mate score first
+        let mateMatch = event.data.match(/score mate (-?\d+)/);
+        let cpMatch = event.data.match(/score cp (-?\d+)/);
+
+        if (mateMatch) {
+            let mateIn = parseInt(mateMatch[1]);
+            gameReviewMateEntry = mateIn;
+            // Use +/-8 for mate scores on chart
+            evalScore = mateIn > 0 ? 8 : -8;
+        } else if (cpMatch) {
+            gameReviewMateEntry = 0;
+            // Convert centipawns to pawns
+            evalScore = parseInt(cpMatch[1]) / 100;
             evalScore = Math.max(-8, Math.min(8, evalScore));
-        } else if (noneMatch) {
-            // for check final eval returns none, use previous score if available
-            if (evalHistory.length > 0) {
-                evalScore = evalHistory[evalHistory.length - 1];
+        }
+
+        // Stockfish score is from side-to-move perspective
+        // Negate when Black to move (odd indices) to keep convention:
+        // positive = White advantage, negative = Black advantage
+        if (evalPositionIndex % 2 === 1) {
+            evalScore = -evalScore;
+            gameReviewMateEntry = -gameReviewMateEntry;
+        }
+
+        pendingEvalScore = evalScore;
+    }
+
+    if (event.data.startsWith('bestmove')) {
+        // Handle checkmate: if no score captured and no legal moves
+        if (pendingEvalScore === 0 && event.data.includes('(none)')) {
+            // Side to move is checkmated - bad for them
+            pendingEvalScore = -8;
+            // Apply negation for Black's turn
+            if (evalPositionIndex % 2 === 1) {
+                pendingEvalScore = 8;
             }
         }
 
-        evalHistory.push(evalScore);
-        evalChart.data.labels.push(lastEval + 1);
-        evalChart.data.datasets[0].data.push(evalScore);
+        // Search completed, finalize both eval and mate
+        evalHistory.push(pendingEvalScore);
+        evalChart.data.labels.push('');
+        evalChart.data.datasets[0].data.push(pendingEvalScore);
         evalChart.update();
         lastEval++;
-    }
+        evalPositionIndex++;
 
-    if (event.data.startsWith('info depth 2')) {
-        let mateMatch = event.data.match('mate (-?\\d+)');
-        let reviewMate = 0;
-        if (mateMatch) {
-            reviewMate = parseInt(mateMatch[1])
-        } else {
-            reviewMate = 0;
-        }
-        gameReviewMateEntry = reviewMate;
-    }
-    if (event.data.startsWith('bestmove')) {
-        // go depth has completed, finalised it
         gameReviewMates.push(gameReviewMateEntry);
         gameReviewMateEntry = 0;
+        pendingEvalScore = 0;
     }
 };
 
@@ -526,14 +526,22 @@ explainButton.addEventListener('click', async () => {
         const data = await response.json();
         console.dir(data);
 
-        // Render explanation
-        let explanationHtml = `<strong>Move Explanation:</strong><br>${data.explanation}<br><br>`;
+        // Render position analysis
+        let explanationHtml = `<strong>Position Summary:</strong><br>${data.position_summary}<br><br>`;
 
-        // Render possible continuations
-        if (data.continuations && data.continuations.length > 0) {
-            explanationHtml += `<strong>Possible Continuations:</strong><ul>`;
-            data.continuations.forEach((continuation) => {
-                    explanationHtml += `<li><strong>${continuation.color} ${continuation.move}:</strong> ${continuation.reason}</li>`;
+        explanationHtml += `<strong>Played Move:</strong><br>${data.played_move_analysis}<br><br>`;
+        explanationHtml += `<strong>Best Move:</strong><br>${data.best_move_analysis}<br><br>`;
+        explanationHtml += `<strong>Key Difference:</strong><br>${data.key_difference}<br><br>`;
+
+        if (data.continuation_explanation) {
+            explanationHtml += `<strong>Continuation Plan:</strong><br>${data.continuation_explanation}<br><br>`;
+        }
+
+        // Render continuation moves
+        if (data.continuation_moves && data.continuation_moves.length > 0) {
+            explanationHtml += `<strong>Key Continuation Moves:</strong><ul>`;
+            data.continuation_moves.forEach((continuation) => {
+                    explanationHtml += `<li><strong>${continuation.color} ${continuation.move}:</strong> ${continuation.purpose}</li>`;
             });
             explanationHtml += `</ul>`;
         }
