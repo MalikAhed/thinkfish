@@ -5,7 +5,11 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+    // baseURL: 'https://api.deepseek.com',
+    baseURL: 'https://api.anthropic.com/v1/',
+    apiKey: process.env.OPENAI_API_KEY
+});
 
 // Middleware
 app.use(cors());
@@ -123,6 +127,8 @@ User will provide a JSON object:
     }],
 }
 
+Pay special attention to additionalContext if provided
+
 OUTPUT
 Your response must be valid JSON. Send it in plain text format without markdown
 
@@ -156,7 +162,8 @@ Only give UP TO MAXIMUM 8 moves from the possible continuation
         console.log('Sending request to OpenAI');
         console.dir(JSON.parse(userPrompt));
         const stream = await openai.chat.completions.create({
-            model: model || "gpt-4o-mini",
+            // model: model || "gpt-4o-mini",
+            model: 'deepseek-chat',
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
@@ -240,6 +247,8 @@ Pay special attention to when the evalScore change significantly (major blunder 
 for your reasoning but you do NOT need to include it in the explanation unless it's a really major change. Do highlight most 
 critical blunders or brilliant moves made by both players and explain their impact
 
+Pay special attention to additionalContext if provided
+
 For example: white misses out an immediate checkmate or black blundered with the move causing the player to 
 lose advantage significantly and lose control of the center. Black could have improved by better position at step 12
 `.trim()
@@ -266,8 +275,11 @@ Pay special attention to when the evalScore change significantly (major blunder 
 for your reasoning but you do NOT need to include it in the explanation unless it's a really major change. Do highlight most 
 critical blunders or brilliant moves made by ${reviewType} and explain their impact
 
+Pay special attention to additionalContext if provided
+
 For example: ${reviewType} misses out an immediate checkmate or ${reviewType} blundered with the move causing the player to 
 lose advantage significantly and lose control of the center. ${reviewType} could have improved by better position at step 12
+
 `
     } else {
         return res.status(400).json({error: 'Invalid review type: ' + reviewType})
@@ -283,6 +295,7 @@ lose advantage significantly and lose control of the center. ${reviewType} could
         console.dir(JSON.parse(userPrompt));
         const stream = await openai.chat.completions.create({
             model: model || "gpt-4o-mini",
+            // model: 'deepseek-chat',
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
@@ -318,3 +331,7 @@ lose advantage significantly and lose control of the center. ${reviewType} could
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
+
+
+
+
