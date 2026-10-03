@@ -158,27 +158,37 @@ Hallucinations spotted:
 - chessboard2.js  
 
 ## 🚀 Quick Start
+
+Run these commands from a terminal:
+
 ```bash
-# Clone the repo
-git clone https://github.com/yourgithub/thinkfish.git
+git clone https://github.com/MalikAhed/thinkfish.git
 cd thinkfish
-
-# Install dependencies
-npm install
-
-# Create .env file
-touch .env
-
-# Add your OpenAI API and Anthropic API key
-echo "OPENAI_API_KEY=<your-key>" >> .env
-echo "ANTHROPIC_API_KEY=<your-key>" >> .env
-
-# Run the project
-node start
+npm ci
 ```
 
-Visit http://localhost:3000 to use the web app, and load a PGN file for
-testing (e.g., `sample.pgn` and `sample2.pgn` is provided as a reference).
+Create a `.env` file in the repository root with your provider keys:
+
+```dotenv
+OPENAI_API_KEY=<your-openai-key>
+ANTHROPIC_API_KEY=<your-anthropic-key>
+```
+
+The server initializes both provider clients at startup. Replace the placeholders locally and keep the keys private; `.env` is already ignored by Git. Model availability and API usage charges depend on the selected provider and your account.
+
+Start the app from the repository root:
+
+```bash
+npm start
+```
+
+The `start` script runs `src/server.js` in Node's watch mode. Visit
+[http://localhost:3000](http://localhost:3000), paste the contents of
+`sample.pgn` or `sample2.pgn` into the PGN field, and click **Load PGN**.
+
+Use the Express server rather than opening `public/index.html` directly. It
+serves the frontend, the LLM API routes, and the COOP/COEP headers needed by
+the Stockfish workers.
 
 ## 🛑 Project Status
 This remains a prototype, and while the prompt update significantly improved 
@@ -191,4 +201,3 @@ feel free to explore, modify, or use it as inspiration for your own projects.
 
 ## 📜 License
 MIT License. Feel free to experiment!
-
