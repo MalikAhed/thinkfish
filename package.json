@@ -1,13 +1,20 @@
 {
   "name": "thinkfish",
   "version": "1.0.0",
+  "private": true,
+  "description": "Chess game review prototype that combines Stockfish evaluations with LLM-generated explanations.",
   "main": "src/server.js",
   "scripts": {
     "start": "node --watch --watch-preserve-output src/server.js"
   },
-  "author": "",
+  "author": "Malik Abuallatta",
   "license": "MIT",
-  "description": "",
+  "keywords": [
+    "chess",
+    "stockfish",
+    "game-review",
+    "llm"
+  ],
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
